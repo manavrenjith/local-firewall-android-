@@ -1,14 +1,16 @@
 package com.example.aegis.vpn.flow
 
+import com.example.aegis.vpn.enforcement.EnforcementState
 import com.example.aegis.vpn.packet.FlowKey
 import com.example.aegis.vpn.packet.TransportHeader
 
 /**
  * FlowEntry - Phase 4: Flow Table & Metadata
+ *             Phase 7: Enforcement Controller
  *
  * Mutable entry representing a network flow.
- * Contains counters, timestamps, and metadata.
- * Observation-only - does not enforce policy.
+ * Contains counters, timestamps, metadata, and enforcement state.
+ * Observation-only - does not enforce policy yet.
  */
 data class FlowEntry(
     val flowKey: FlowKey,
@@ -19,9 +21,12 @@ data class FlowEntry(
     var byteCount: Long = 0,
     var transportMetadata: TransportMetadata? = null,
 
-    // Phase 4: Placeholder fields (not yet implemented)
+    // Phase 5: UID and decision
     var uid: Int = UID_UNKNOWN,
-    var decision: FlowDecision = FlowDecision.UNDECIDED
+    var decision: FlowDecision = FlowDecision.UNDECIDED,
+
+    // Phase 7: Enforcement state (metadata only)
+    var enforcementState: EnforcementState = EnforcementState.NONE
 ) {
     companion object {
         const val UID_UNKNOWN = -1
@@ -42,6 +47,14 @@ data class FlowEntry(
      */
     fun isIdle(timeoutMillis: Long): Boolean {
         return System.currentTimeMillis() - lastSeenTimestamp > timeoutMillis
+    }
+
+    /**
+     * Get flow age in milliseconds.
+     * Phase 7: Used for confidence checks.
+     */
+    fun getAge(): Long {
+        return System.currentTimeMillis() - firstSeenTimestamp
     }
 }
 

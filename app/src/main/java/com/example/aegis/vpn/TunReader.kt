@@ -3,6 +3,7 @@ package com.example.aegis.vpn
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.example.aegis.vpn.decision.DecisionEvaluator
+import com.example.aegis.vpn.enforcement.EnforcementController
 import com.example.aegis.vpn.flow.FlowTable
 import com.example.aegis.vpn.packet.PacketParser
 import com.example.aegis.vpn.uid.UidResolver
@@ -17,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong
  *             Phase 4: Flow Table & Metadata (Read-Only)
  *             Phase 5: UID Attribution (Best-Effort, Metadata Only)
  *             Phase 6: Decision Engine (Decision-Only, No Enforcement)
+ *             Phase 7: Enforcement Controller (Gatekeeper, No Forwarding)
  *
  * Responsibilities:
  * - Read raw IP packets from VPN TUN interface
@@ -24,21 +26,23 @@ import java.util.concurrent.atomic.AtomicLong
  * - Track flows in flow table (Phase 4)
  * - Attribute UIDs to flows (Phase 5)
  * - Evaluate flow decisions (Phase 6)
+ * - Evaluate enforcement readiness (Phase 7)
  * - Observation-only (no forwarding, no modification)
  * - Thread lifecycle management
  * - Graceful error handling
  *
- * Non-responsibilities (Phase 6):
+ * Non-responsibilities (Phase 7):
  * - No packet modification
  * - No packet forwarding
  * - No socket operations
- * - No enforcement (Phase 7+)
+ * - No actual enforcement (Phase 8+)
  */
 class TunReader(
     private val vpnInterface: ParcelFileDescriptor,
     private val flowTable: FlowTable,
     private val uidResolver: UidResolver,
     private val decisionEvaluator: DecisionEvaluator,
+    private val enforcementController: EnforcementController,
     private val onError: () -> Unit
 ) {
 
@@ -51,6 +55,9 @@ class TunReader(
 
         // Decision evaluation interval
         private const val DECISION_EVALUATION_INTERVAL_MS = 15000L  // 15 seconds
+
+        // Enforcement evaluation interval
+        private const val ENFORCEMENT_EVALUATION_INTERVAL_MS = 20000L  // 20 seconds
     }
 
     private var readThread: Thread? = null
@@ -69,6 +76,9 @@ class TunReader(
 
     // Phase 6: Decision evaluation timing
     private var lastDecisionEvaluationTime = 0L
+
+    // Phase 7: Enforcement evaluation timing
+    private var lastEnforcementEvaluationTime = 0L
 
     /**
      * Starts the packet read loop.
@@ -207,6 +217,12 @@ class TunReader(
                     decisionEvaluator.evaluateFlows()
                 }
 
+                // Phase 7: Periodically evaluate enforcement (time-based, not per-packet)
+                if (now - lastEnforcementEvaluationTime > ENFORCEMENT_EVALUATION_INTERVAL_MS) {
+                    lastEnforcementEvaluationTime = now
+                    enforcementController.evaluateEnforcement()
+                }
+
                 // Log parsed packet info (rate-limited)
                 if (VpnConstants.LOG_PARSED_PACKETS && totalPacketsParsed.get() % 1000 == 1L) {
                     logParsedPacket(parsedPacket)
@@ -227,10 +243,10 @@ class TunReader(
         }
 
         // Future phases will:
-        // - Enforce decisions (Phase 7+)
-        // - Forward via protected sockets (Phase 8+)
+        // - Forward packets via protected sockets (Phase 8+)
+        // - Enforce decisions (Phase 8+)
 
-        // Phase 2/3/4/5/6: Packet is silently dropped (by design)
+        // Phase 2/3/4/5/6/7: Packet is silently dropped (by design)
     }
 
     /**
