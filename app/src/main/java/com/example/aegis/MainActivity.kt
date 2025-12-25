@@ -21,6 +21,7 @@ import com.example.aegis.vpn.VpnController
  *                Phase 3: Packet Parsing (Observation Only)
  *                Phase 4: Flow Table & Metadata (Read-Only)
  *                Phase 5: UID Attribution (Best-Effort, Metadata Only)
+ *                Phase 6: Decision Engine (Decision-Only, No Enforcement)
  *
  * Provides basic UI to start and stop VPN service.
  * Handles VPN permission request flow.
@@ -111,7 +112,7 @@ fun VpnControlScreen(
         )
 
         Text(
-            text = "Phase 5: UID Attribution (Best-Effort, Metadata Only)",
+            text = "Phase 6: Decision Engine (Decision-Only, No Enforcement)",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.secondary,
             modifier = Modifier.padding(bottom = 48.dp)
@@ -152,7 +153,7 @@ fun VpnControlScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
                 Text(
-                    text = "• UID attribution active\n• Flows matched to apps\n• Best-effort resolution\n• No forwarding (dropped)",
+                    text = "• Decision engine active\n• Flows evaluated (ALLOW/BLOCK)\n• Decisions are metadata only\n• No enforcement (dropped)",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

@@ -2,6 +2,7 @@ package com.example.aegis.vpn
 
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.example.aegis.vpn.decision.DecisionEvaluator
 import com.example.aegis.vpn.flow.FlowTable
 import com.example.aegis.vpn.packet.PacketParser
 import com.example.aegis.vpn.uid.UidResolver
@@ -15,26 +16,29 @@ import java.util.concurrent.atomic.AtomicLong
  *             Phase 3: Packet Parsing (Observation Only)
  *             Phase 4: Flow Table & Metadata (Read-Only)
  *             Phase 5: UID Attribution (Best-Effort, Metadata Only)
+ *             Phase 6: Decision Engine (Decision-Only, No Enforcement)
  *
  * Responsibilities:
  * - Read raw IP packets from VPN TUN interface
  * - Parse packets into structured metadata (Phase 3)
  * - Track flows in flow table (Phase 4)
  * - Attribute UIDs to flows (Phase 5)
+ * - Evaluate flow decisions (Phase 6)
  * - Observation-only (no forwarding, no modification)
  * - Thread lifecycle management
  * - Graceful error handling
  *
- * Non-responsibilities (Phase 5):
+ * Non-responsibilities (Phase 6):
  * - No packet modification
  * - No packet forwarding
  * - No socket operations
- * - No enforcement logic (Phase 6+)
+ * - No enforcement (Phase 7+)
  */
 class TunReader(
     private val vpnInterface: ParcelFileDescriptor,
     private val flowTable: FlowTable,
     private val uidResolver: UidResolver,
+    private val decisionEvaluator: DecisionEvaluator,
     private val onError: () -> Unit
 ) {
 
@@ -44,6 +48,9 @@ class TunReader(
 
         // UID resolution interval
         private const val UID_RESOLUTION_INTERVAL_MS = 10000L  // 10 seconds
+
+        // Decision evaluation interval
+        private const val DECISION_EVALUATION_INTERVAL_MS = 15000L  // 15 seconds
     }
 
     private var readThread: Thread? = null
@@ -59,6 +66,9 @@ class TunReader(
 
     // Phase 5: UID resolution timing
     private var lastUidResolutionTime = 0L
+
+    // Phase 6: Decision evaluation timing
+    private var lastDecisionEvaluationTime = 0L
 
     /**
      * Starts the packet read loop.
@@ -163,6 +173,7 @@ class TunReader(
      * Phase 3: Parse packet into structured metadata (observation only).
      * Phase 4: Track flow in flow table.
      * Phase 5: Periodically resolve UIDs.
+     * Phase 6: Periodically evaluate decisions.
      *
      * @param buffer Byte array containing packet data
      * @param length Number of valid bytes in buffer
@@ -182,11 +193,18 @@ class TunReader(
                 // Phase 4: Track flow in flow table
                 flowTable.processPacket(parsedPacket, length)
 
-                // Phase 5: Periodically resolve UIDs (time-based, not per-packet)
                 val now = System.currentTimeMillis()
+
+                // Phase 5: Periodically resolve UIDs (time-based, not per-packet)
                 if (now - lastUidResolutionTime > UID_RESOLUTION_INTERVAL_MS) {
                     lastUidResolutionTime = now
                     uidResolver.resolveUids()
+                }
+
+                // Phase 6: Periodically evaluate decisions (time-based, not per-packet)
+                if (now - lastDecisionEvaluationTime > DECISION_EVALUATION_INTERVAL_MS) {
+                    lastDecisionEvaluationTime = now
+                    decisionEvaluator.evaluateFlows()
                 }
 
                 // Log parsed packet info (rate-limited)
@@ -209,10 +227,10 @@ class TunReader(
         }
 
         // Future phases will:
-        // - Apply rules (Phase 6+)
-        // - Forward via protected sockets (Phase 7+)
+        // - Enforce decisions (Phase 7+)
+        // - Forward via protected sockets (Phase 8+)
 
-        // Phase 2/3/4/5: Packet is silently dropped (by design)
+        // Phase 2/3/4/5/6: Packet is silently dropped (by design)
     }
 
     /**

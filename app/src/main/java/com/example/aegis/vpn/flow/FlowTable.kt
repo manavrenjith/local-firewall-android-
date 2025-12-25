@@ -8,6 +8,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * FlowTable - Phase 4: Flow Table & Metadata
+ *             Phase 5: UID Attribution
+ *             Phase 6: Decision Engine (Decision-Only, No Enforcement)
  *
  * Thread-safe in-memory flow tracking table.
  * Maps FlowKey to FlowEntry for active connections.
@@ -17,9 +19,10 @@ import java.util.concurrent.ConcurrentHashMap
  * - Update counters and timestamps
  * - Clean up idle flows
  * - Extract transport metadata
+ * - Support UID attribution (Phase 5)
+ * - Support decision evaluation (Phase 6)
  *
- * Non-responsibilities (Phase 4):
- * - No UID attribution
+ * Non-responsibilities (Phase 6):
  * - No rule enforcement
  * - No packet forwarding
  * - No persistent storage
@@ -272,6 +275,27 @@ class FlowTable {
         } catch (e: Exception) {
             // Swallow errors - never break flow table
             Log.e(TAG, "Error during UID attribution iteration", e)
+        }
+    }
+
+    /**
+     * Iterate through flows for decision evaluation.
+     * Phase 6: Allows DecisionEngine to process flows without exposing internal map.
+     *
+     * @param action Function to apply to each flow
+     */
+    fun evaluateDecisions(action: (FlowEntry) -> Unit) {
+        try {
+            flows.values.forEach { flow ->
+                try {
+                    action(flow)
+                } catch (e: Exception) {
+                    // Skip this flow on error
+                }
+            }
+        } catch (e: Exception) {
+            // Swallow errors - never break flow table
+            Log.e(TAG, "Error during decision evaluation iteration", e)
         }
     }
 }
