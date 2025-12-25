@@ -9,9 +9,12 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.example.aegis.MainActivity
+import com.example.aegis.vpn.flow.FlowTable
 
 /**
  * Aegis VPN Service - Phase 2: TUN Interface & Routing
+ *                      Phase 3: Packet Parsing (Observation Only)
+ *                      Phase 4: Flow Table & Metadata (Read-Only)
  *
  * Responsibilities:
  * - VPN lifecycle management (start/stop)
@@ -20,19 +23,20 @@ import com.example.aegis.MainActivity
  * - Idempotent operation handling
  * - TUN packet reading (observation only)
  * - Read thread lifecycle management
+ * - Flow table management (Phase 4)
  *
- * Non-responsibilities (Phase 2):
- * - No packet parsing (no IP/TCP/UDP headers)
+ * Non-responsibilities (Phase 4):
  * - No packet modification
  * - No packet forwarding
  * - No socket operations
- * - No UID attribution
- * - No rules or enforcement
+ * - No UID attribution (Phase 5)
+ * - No rules or enforcement (Phase 5+)
  */
 class AegisVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var tunReader: TunReader? = null
+    private var flowTable: FlowTable? = null
     private var isRunning = false
 
     companion object {
@@ -145,6 +149,7 @@ class AegisVpnService : VpnService() {
     /**
      * Starts TUN packet reader.
      * Called after VPN establishment.
+     * Phase 4: Creates flow table for tracking.
      */
     private fun startTunReader() {
         val iface = vpnInterface
@@ -154,13 +159,16 @@ class AegisVpnService : VpnService() {
         }
 
         try {
-            tunReader = TunReader(iface) {
+            // Phase 4: Create flow table
+            flowTable = FlowTable()
+
+            tunReader = TunReader(iface, flowTable!!) {
                 // Error callback - triggered on unrecoverable read errors
                 Log.e(TAG, "TunReader reported error, initiating VPN teardown")
                 handleStop()
             }
             tunReader?.start()
-            Log.d(TAG, "TunReader started")
+            Log.d(TAG, "TunReader started with flow tracking")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start TunReader", e)
             handleStop()
@@ -171,12 +179,18 @@ class AegisVpnService : VpnService() {
      * Stops TUN packet reader.
      * Called before VPN teardown.
      * Safe to call multiple times.
+     * Phase 4: Also clears flow table.
      */
     private fun stopTunReader() {
         try {
             tunReader?.stop()
             tunReader = null
-            Log.d(TAG, "TunReader stopped")
+
+            // Phase 4: Clear flow table
+            flowTable?.clear()
+            flowTable = null
+
+            Log.d(TAG, "TunReader stopped, flow table cleared")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping TunReader", e)
         }

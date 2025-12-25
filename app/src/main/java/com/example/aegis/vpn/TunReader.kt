@@ -2,6 +2,10 @@ package com.example.aegis.vpn
 
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.example.aegis.vpn.flow.FlowTable
+import com.example.aegis.vpn.packet.PacketParser
+import com.example.aegis.vpn.packet.ParsedPacket
+import com.example.aegis.vpn.packet.TransportHeader
 import java.io.FileInputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -9,23 +13,27 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * TunReader - Phase 2: TUN Interface & Routing
+ *             Phase 3: Packet Parsing (Observation Only)
+ *             Phase 4: Flow Table & Metadata (Read-Only)
  *
  * Responsibilities:
  * - Read raw IP packets from VPN TUN interface
+ * - Parse packets into structured metadata (Phase 3)
+ * - Track flows in flow table (Phase 4)
  * - Observation-only (no forwarding, no modification)
  * - Thread lifecycle management
  * - Graceful error handling
  *
- * Non-responsibilities (Phase 2):
- * - No packet parsing
+ * Non-responsibilities (Phase 4):
  * - No packet modification
  * - No packet forwarding
  * - No socket operations
- * - No UID attribution
- * - No enforcement logic
+ * - No UID attribution (Phase 5)
+ * - No enforcement logic (Phase 5+)
  */
 class TunReader(
     private val vpnInterface: ParcelFileDescriptor,
+    private val flowTable: FlowTable,
     private val onError: () -> Unit
 ) {
 
@@ -94,8 +102,9 @@ class TunReader(
 
         readThread = null
 
+        val flowStats = flowTable.getStatistics()
         Log.i(TAG, "TUN read loop stopped. Stats: packets=$totalPacketsRead, bytes=$totalBytesRead, " +
-                "parsed=$totalPacketsParsed, parseFailures=$totalParseFailures")
+                "parsed=$totalPacketsParsed, parseFailures=$totalParseFailures, flows=${flowStats.totalFlows}")
     }
 
     /**
@@ -144,6 +153,8 @@ class TunReader(
     /**
      * Handles a packet read from TUN interface.
      * Phase 2: Observation only - no parsing, no forwarding.
+     * Phase 3: Parse packet into structured metadata (observation only).
+     * Phase 4: Track flow in flow table.
      *
      * @param buffer Byte array containing packet data
      * @param length Number of valid bytes in buffer
@@ -153,20 +164,72 @@ class TunReader(
         totalPacketsRead.incrementAndGet()
         totalBytesRead.addAndGet(length.toLong())
 
-        // Phase 2: Observation only
-        // Log packet receipt (with rate limiting in production)
-        if (totalPacketsRead.get() % 1000 == 1L) {
-            Log.d(TAG, "Packet read: length=$length bytes (total packets: ${totalPacketsRead.get()})")
+        // Phase 3+: Parse packet if enabled
+        if (VpnConstants.ENABLE_PACKET_PARSING) {
+            val parsedPacket = PacketParser.parse(buffer, length)
+
+            if (parsedPacket != null) {
+                totalPacketsParsed.incrementAndGet()
+
+                // Phase 4: Track flow in flow table
+                flowTable.processPacket(parsedPacket, length)
+
+                // Log parsed packet info (rate-limited)
+                if (VpnConstants.LOG_PARSED_PACKETS && totalPacketsParsed.get() % 1000 == 1L) {
+                    logParsedPacket(parsedPacket)
+                }
+            } else {
+                totalParseFailures.incrementAndGet()
+
+                // Log parse failures occasionally
+                if (totalParseFailures.get() % 100 == 1L) {
+                    Log.d(TAG, "Packet parsing failed (total failures: ${totalParseFailures.get()})")
+                }
+            }
+        } else {
+            // Phase 2: Observation only (no parsing)
+            if (totalPacketsRead.get() % 1000 == 1L) {
+                Log.d(TAG, "Packet read: length=$length bytes (total packets: ${totalPacketsRead.get()})")
+            }
         }
 
         // Future phases will:
-        // - Parse IP headers
-        // - Classify protocol (TCP/UDP/ICMP)
-        // - Attribute to UID
-        // - Apply rules
-        // - Forward via protected sockets
+        // - Attribute to UID (Phase 5)
+        // - Apply rules (Phase 5+)
+        // - Forward via protected sockets (Phase 6+)
 
-        // Phase 2: Packet is silently dropped (by design)
+        // Phase 2/3/4: Packet is silently dropped (by design)
+    }
+
+    /**
+     * Log parsed packet information.
+     * Phase 3+: Observation only.
+     */
+    private fun logParsedPacket(packet: com.example.aegis.vpn.packet.ParsedPacket) {
+        val transportInfo = when (val header = packet.transportHeader) {
+            is com.example.aegis.vpn.packet.TransportHeader.Tcp -> {
+                val flags = buildString {
+                    if (header.flags.syn) append("SYN ")
+                    if (header.flags.ack) append("ACK ")
+                    if (header.flags.fin) append("FIN ")
+                    if (header.flags.rst) append("RST ")
+                    if (header.flags.psh) append("PSH ")
+                }.trim()
+                "TCP ${header.sourcePort}→${header.destinationPort} [$flags] seq=${header.sequenceNumber}"
+            }
+            is com.example.aegis.vpn.packet.TransportHeader.Udp -> {
+                "UDP ${header.sourcePort}→${header.destinationPort} len=${header.length}"
+            }
+            is com.example.aegis.vpn.packet.TransportHeader.Icmp -> {
+                "ICMP type=${header.type} code=${header.code}"
+            }
+            is com.example.aegis.vpn.packet.TransportHeader.Unknown -> {
+                "Unknown protocol=${packet.ipHeader.protocol}"
+            }
+        }
+
+        Log.d(TAG, "Parsed: ${packet.ipHeader.sourceAddress} → ${packet.ipHeader.destinationAddress} | " +
+                "$transportInfo | total=${totalPacketsParsed.get()}")
     }
 
     /**
