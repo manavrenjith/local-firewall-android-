@@ -3,6 +3,7 @@ package com.example.aegis.vpn
 /**
  * Constants for VPN service operations.
  * Phase 1 — VPN Skeleton & Lifecycle
+ * Phase 3 — Packet Parsing
  */
 object VpnConstants {
     // Intent actions
@@ -19,5 +20,9 @@ object VpnConstants {
     const val VPN_ROUTE = "0.0.0.0"
     const val VPN_PREFIX_LENGTH = 0
     const val VPN_MTU = 1500
+
+    // Phase 3: Packet parsing
+    const val ENABLE_PACKET_PARSING = true
+    const val LOG_PARSED_PACKETS = true  // Log parsed packet info (rate-limited)
 }
 

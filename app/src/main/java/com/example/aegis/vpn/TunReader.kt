@@ -41,6 +41,10 @@ class TunReader(
     private val totalPacketsRead = AtomicLong(0)
     private val totalBytesRead = AtomicLong(0)
 
+    // Phase 3: Parsing statistics
+    private val totalPacketsParsed = AtomicLong(0)
+    private val totalParseFailures = AtomicLong(0)
+
     /**
      * Starts the packet read loop.
      * Safe to call only once - subsequent calls are ignored.
@@ -90,7 +94,8 @@ class TunReader(
 
         readThread = null
 
-        Log.i(TAG, "TUN read loop stopped. Stats: packets=$totalPacketsRead, bytes=$totalBytesRead")
+        Log.i(TAG, "TUN read loop stopped. Stats: packets=$totalPacketsRead, bytes=$totalBytesRead, " +
+                "parsed=$totalPacketsParsed, parseFailures=$totalParseFailures")
     }
 
     /**
