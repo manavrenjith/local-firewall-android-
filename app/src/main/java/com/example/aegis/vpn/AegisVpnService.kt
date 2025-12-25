@@ -11,17 +11,20 @@ import android.util.Log
 import com.example.aegis.MainActivity
 
 /**
- * Aegis VPN Service - Phase 1: VPN Skeleton & Lifecycle
+ * Aegis VPN Service - Phase 2: TUN Interface & Routing
  *
  * Responsibilities:
  * - VPN lifecycle management (start/stop)
  * - Foreground service with persistent notification
  * - VPN establishment and teardown
  * - Idempotent operation handling
+ * - TUN packet reading (observation only)
+ * - Read thread lifecycle management
  *
- * Non-responsibilities (Phase 1):
- * - No TUN reads or writes
- * - No packet parsing
+ * Non-responsibilities (Phase 2):
+ * - No packet parsing (no IP/TCP/UDP headers)
+ * - No packet modification
+ * - No packet forwarding
  * - No socket operations
  * - No UID attribution
  * - No rules or enforcement
@@ -29,6 +32,7 @@ import com.example.aegis.MainActivity
 class AegisVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    private var tunReader: TunReader? = null
     private var isRunning = false
 
     companion object {
@@ -64,6 +68,8 @@ class AegisVpnService : VpnService() {
         // Establish VPN
         val success = establishVpn()
         if (success) {
+            // Start TUN read loop after successful establishment
+            startTunReader()
             isRunning = true
             Log.i(TAG, "VPN started successfully")
         } else {
@@ -84,6 +90,7 @@ class AegisVpnService : VpnService() {
         }
 
         Log.i(TAG, "Stopping VPN service")
+        stopTunReader()
         teardownVpn()
         isRunning = false
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -136,6 +143,46 @@ class AegisVpnService : VpnService() {
     }
 
     /**
+     * Starts TUN packet reader.
+     * Called after VPN establishment.
+     */
+    private fun startTunReader() {
+        val iface = vpnInterface
+        if (iface == null) {
+            Log.e(TAG, "Cannot start TunReader: vpnInterface is null")
+            return
+        }
+
+        try {
+            tunReader = TunReader(iface) {
+                // Error callback - triggered on unrecoverable read errors
+                Log.e(TAG, "TunReader reported error, initiating VPN teardown")
+                handleStop()
+            }
+            tunReader?.start()
+            Log.d(TAG, "TunReader started")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start TunReader", e)
+            handleStop()
+        }
+    }
+
+    /**
+     * Stops TUN packet reader.
+     * Called before VPN teardown.
+     * Safe to call multiple times.
+     */
+    private fun stopTunReader() {
+        try {
+            tunReader?.stop()
+            tunReader = null
+            Log.d(TAG, "TunReader stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping TunReader", e)
+        }
+    }
+
+    /**
      * Creates foreground notification for the service.
      */
     private fun createNotification(): Notification {
@@ -171,6 +218,7 @@ class AegisVpnService : VpnService() {
 
     override fun onDestroy() {
         Log.i(TAG, "Service destroyed")
+        stopTunReader()
         teardownVpn()
         isRunning = false
         super.onDestroy()
