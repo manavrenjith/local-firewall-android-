@@ -20,6 +20,7 @@ import com.example.aegis.vpn.VpnController
  * MainActivity - Phase 1: VPN Skeleton & Lifecycle
  *                Phase 3: Packet Parsing (Observation Only)
  *                Phase 4: Flow Table & Metadata (Read-Only)
+ *                Phase 5: UID Attribution (Best-Effort, Metadata Only)
  *
  * Provides basic UI to start and stop VPN service.
  * Handles VPN permission request flow.
@@ -110,7 +111,7 @@ fun VpnControlScreen(
         )
 
         Text(
-            text = "Phase 4: Flow Table & Metadata (Read-Only)",
+            text = "Phase 5: UID Attribution (Best-Effort, Metadata Only)",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.secondary,
             modifier = Modifier.padding(bottom = 48.dp)
@@ -151,7 +152,7 @@ fun VpnControlScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
                 Text(
-                    text = "• Flow tracking active\n• TCP/UDP/ICMP flows monitored\n• Idle flows cleaned up\n• No forwarding (dropped)",
+                    text = "• UID attribution active\n• Flows matched to apps\n• Best-effort resolution\n• No forwarding (dropped)",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

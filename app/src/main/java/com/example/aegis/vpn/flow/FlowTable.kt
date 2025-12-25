@@ -253,6 +253,27 @@ class FlowTable {
         flows.clear()
         Log.d(TAG, "Flow table cleared")
     }
+
+    /**
+     * Iterate through flows for UID attribution.
+     * Phase 5: Allows UidResolver to process flows without exposing internal map.
+     *
+     * @param action Function to apply to each flow
+     */
+    fun attributeUids(action: (FlowEntry) -> Unit) {
+        try {
+            flows.values.forEach { flow ->
+                try {
+                    action(flow)
+                } catch (e: Exception) {
+                    // Skip this flow on error
+                }
+            }
+        } catch (e: Exception) {
+            // Swallow errors - never break flow table
+            Log.e(TAG, "Error during UID attribution iteration", e)
+        }
+    }
 }
 
 /**
