@@ -26,6 +26,7 @@ import com.example.aegis.vpn.VpnController
  *                Phase 8: TCP Socket Forwarding (Connectivity Restore)
  *                Phase 8.1: TCP Downlink Reinjection (Bidirectional Completion)
  *                Phase 8.2: Forwarding Telemetry & Flow Metrics
+ *                Phase 8.3: Flow Snapshot Exposure & UI Bridge
  *
  * Provides basic UI to start and stop VPN service.
  * Handles VPN permission request flow.
@@ -116,7 +117,7 @@ fun VpnControlScreen(
         )
 
         Text(
-            text = "Phase 8.2: Forwarding Telemetry & Flow Metrics",
+            text = "Phase 8.3: Flow Snapshot Exposure & UI Bridge",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.secondary,
             modifier = Modifier.padding(bottom = 48.dp)
@@ -137,7 +138,7 @@ fun VpnControlScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
                 Text(
-                    text = "• Bidirectional TCP forwarding active\n• Per-flow telemetry tracking\n• Uplink/downlink metrics\n• HTTPS fully functional!",
+                    text = "• Telemetry exposed via UI bridge\n• Read-only snapshot API\n• Thread-safe UI access\n• HTTPS fully functional!",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

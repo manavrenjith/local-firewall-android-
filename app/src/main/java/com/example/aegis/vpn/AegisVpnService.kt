@@ -13,6 +13,7 @@ import com.example.aegis.vpn.decision.DecisionEvaluator
 import com.example.aegis.vpn.enforcement.EnforcementController
 import com.example.aegis.vpn.flow.FlowTable
 import com.example.aegis.vpn.forwarding.ForwarderRegistry
+import com.example.aegis.vpn.telemetry.FlowSnapshotProvider
 import com.example.aegis.vpn.uid.UidResolver
 
 /**
@@ -54,10 +55,23 @@ class AegisVpnService : VpnService() {
     private var decisionEvaluator: DecisionEvaluator? = null
     private var enforcementController: EnforcementController? = null
     private var forwarderRegistry: ForwarderRegistry? = null
+    private var snapshotProvider: FlowSnapshotProvider? = null
     private var isRunning = false
 
     companion object {
         private const val TAG = "AegisVpnService"
+
+        // Phase 8.3: Singleton reference for UI bridge access
+        @Volatile
+        private var instance: AegisVpnService? = null
+
+        /**
+         * Get current service instance.
+         * Phase 8.3: Allows VpnController to access snapshot provider.
+         *
+         * @return Service instance if running, null otherwise
+         */
+        internal fun getInstance(): AegisVpnService? = instance
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -183,6 +197,9 @@ class AegisVpnService : VpnService() {
             // Phase 4: Create flow table
             flowTable = FlowTable()
 
+            // Phase 8.3: Create snapshot provider for UI bridge
+            snapshotProvider = FlowSnapshotProvider(flowTable!!)
+
             // Phase 5: Create UID resolver
             uidResolver = UidResolver(flowTable!!)
 
@@ -222,6 +239,7 @@ class AegisVpnService : VpnService() {
      * Phase 6: Also nullifies decision evaluator.
      * Phase 7: Also nullifies enforcement controller.
      * Phase 8: Also closes all forwarders.
+     * Phase 8.3: Also nullifies snapshot provider.
      */
     private fun stopTunReader() {
         try {
@@ -231,6 +249,9 @@ class AegisVpnService : VpnService() {
             // Phase 8: Close all forwarders
             forwarderRegistry?.closeAll()
             forwarderRegistry = null
+
+            // Phase 8.3: Clear snapshot provider
+            snapshotProvider = null
 
             // Phase 4: Clear flow table
             flowTable?.clear()
@@ -245,7 +266,8 @@ class AegisVpnService : VpnService() {
             // Phase 7: Clear enforcement controller
             enforcementController = null
 
-            Log.d(TAG, "TunReader stopped, forwarders closed, flow table cleared, components released")
+            Log.d(TAG, "TunReader stopped, forwarders closed, snapshot provider released, " +
+                    "flow table cleared, components released")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping TunReader", e)
         }
@@ -287,6 +309,10 @@ class AegisVpnService : VpnService() {
 
     override fun onDestroy() {
         Log.i(TAG, "Service destroyed")
+
+        // Phase 8.3: Clear instance reference
+        instance = null
+
         stopTunReader()
         teardownVpn()
         isRunning = false
@@ -297,6 +323,16 @@ class AegisVpnService : VpnService() {
         Log.w(TAG, "VPN permission revoked by system")
         handleStop()
         super.onRevoke()
+    }
+
+    /**
+     * Get snapshot provider for UI bridge.
+     * Phase 8.3: Read-only access to flow snapshots.
+     *
+     * @return FlowSnapshotProvider if VPN running, null otherwise
+     */
+    fun getSnapshotProvider(): FlowSnapshotProvider? {
+        return snapshotProvider
     }
 }
 
