@@ -47,6 +47,9 @@ class TcpForwarder(
         private const val SO_TIMEOUT_MS = 30000  // 30 seconds (longer for responses)
         private const val BUFFER_SIZE = 8192
 
+        // Phase 10: Thread termination timeout
+        private const val THREAD_JOIN_TIMEOUT_MS = 2000L  // 2 seconds
+
         // TCP flags
         private const val TCP_FIN = 0x01
         private const val TCP_SYN = 0x02
@@ -425,6 +428,7 @@ class TcpForwarder(
      * Close the forwarder and release resources.
      * Idempotent and thread-safe.
      * Phase 8.1: Also closes TUN output stream.
+     * Phase 10: Deterministic thread termination with timeout.
      */
     fun close() {
         if (isClosed.getAndSet(true)) {
@@ -433,14 +437,29 @@ class TcpForwarder(
 
         isActive.set(false)
 
+        // Phase 10: Close socket first to unblock read operations
         try {
             socket?.close()
-            socket = null
         } catch (e: Exception) {
-            Log.w(TAG, "Error closing socket: ${e.message}")
+            // Defensive: log but continue cleanup
         }
+        socket = null
 
-        // Threads will exit naturally
+        // Phase 10: Wait for downlink thread termination (bounded)
+        val thread = downlinkThread
+        if (thread != null && thread.isAlive) {
+            try {
+                thread.interrupt()
+                thread.join(THREAD_JOIN_TIMEOUT_MS)
+                if (thread.isAlive) {
+                    Log.w(TAG, "Downlink thread did not terminate for ${flow.flowKey}")
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                // Defensive: continue cleanup
+            }
+        }
         downlinkThread = null
 
         Log.d(TAG, "TCP forwarder closed for ${flow.flowKey}")

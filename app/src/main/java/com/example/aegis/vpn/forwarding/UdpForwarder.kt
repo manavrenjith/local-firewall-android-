@@ -41,6 +41,9 @@ class UdpForwarder(
         private const val TAG = "UdpForwarder"
         private const val BUFFER_SIZE = 8192
         private const val SO_TIMEOUT_MS = 5000  // 5 seconds
+
+        // Phase 10: Thread termination timeout
+        private const val THREAD_JOIN_TIMEOUT_MS = 2000L  // 2 seconds
     }
 
     private var socket: DatagramSocket? = null
@@ -356,6 +359,7 @@ class UdpForwarder(
     /**
      * Close the forwarder and release resources.
      * Idempotent and thread-safe.
+     * Phase 10: Deterministic thread termination with timeout.
      */
     fun close() {
         if (isClosed.getAndSet(true)) {
@@ -364,14 +368,29 @@ class UdpForwarder(
 
         isActive.set(false)
 
+        // Phase 10: Close socket first to unblock receive operations
         try {
             socket?.close()
-            socket = null
         } catch (e: Exception) {
-            Log.w(TAG, "Error closing UDP socket: ${e.message}")
+            // Defensive: continue cleanup
         }
+        socket = null
 
-        // Thread will exit naturally
+        // Phase 10: Wait for downlink thread termination (bounded)
+        val thread = downlinkThread
+        if (thread != null && thread.isAlive) {
+            try {
+                thread.interrupt()
+                thread.join(THREAD_JOIN_TIMEOUT_MS)
+                if (thread.isAlive) {
+                    Log.w(TAG, "Downlink thread did not terminate for ${flow.flowKey}")
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                // Defensive: continue cleanup
+            }
+        }
         downlinkThread = null
 
         Log.d(TAG, "UDP forwarder closed for ${flow.flowKey}")

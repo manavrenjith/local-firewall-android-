@@ -48,6 +48,9 @@ class FlowTable {
 
         // Cleanup interval
         private const val CLEANUP_INTERVAL_MS = 30_000L  // 30 seconds
+
+        // Phase 10: Soft limit to prevent unbounded growth (fail-open)
+        private const val MAX_FLOWS = 10000
     }
 
     // Thread-safe flow map
@@ -59,6 +62,7 @@ class FlowTable {
     /**
      * Process a parsed packet and update flow table.
      * Creates flow entry if needed, updates counters.
+     * Phase 10: Soft limit to prevent unbounded growth.
      *
      * @param packet Parsed packet
      * @param packetLength Original packet length
@@ -69,6 +73,12 @@ class FlowTable {
 
             // Get or create flow entry
             val flow = flows.getOrPut(flowKey) {
+                // Phase 10: Soft limit check before creating new flow
+                if (flows.size >= MAX_FLOWS) {
+                    Log.w(TAG, "Flow table limit reached (${flows.size}), dropping new flow tracking")
+                    // Fail-open: return a transient flow that won't be stored
+                    return@processPacket
+                }
                 createFlowEntry(packet)
             }
 

@@ -46,6 +46,10 @@ class ForwarderRegistry(
 
         // Phase 9: UDP idle timeout
         private const val UDP_IDLE_TIMEOUT_MS = 60_000L  // 60 seconds
+
+        // Phase 10: Soft limits to prevent unbounded growth (fail-open)
+        private const val MAX_TCP_FORWARDERS = 1000
+        private const val MAX_UDP_FORWARDERS = 2000  // Higher for stateless UDP
     }
 
     // Active TCP forwarders by FlowKey
@@ -85,6 +89,12 @@ class ForwarderRegistry(
         val existing = tcpForwarders[flow.flowKey]
         if (existing != null && existing.isActive()) {
             return existing
+        }
+
+        // Phase 10: Soft limit check (fail-open: drop tracking, not traffic)
+        if (tcpForwarders.size >= MAX_TCP_FORWARDERS) {
+            Log.w(TAG, "TCP forwarder limit reached (${tcpForwarders.size}), dropping new forwarder creation")
+            return null
         }
 
         // Create new forwarder (Phase 8.1: with TUN interface)
@@ -131,6 +141,12 @@ class ForwarderRegistry(
         val existing = udpForwarders[flow.flowKey]
         if (existing != null && existing.isActive()) {
             return existing
+        }
+
+        // Phase 10: Soft limit check (fail-open: drop tracking, not traffic)
+        if (udpForwarders.size >= MAX_UDP_FORWARDERS) {
+            Log.w(TAG, "UDP forwarder limit reached (${udpForwarders.size}), dropping new forwarder creation")
+            return null
         }
 
         // Create new UDP forwarder
@@ -218,51 +234,65 @@ class ForwarderRegistry(
      * Clean up inactive forwarders.
      * Called periodically.
      * Phase 9: Also cleans up idle UDP forwarders.
+     * Phase 10: Defensive error handling per forwarder.
      */
     fun cleanup() {
+        // Phase 10: Cleanup TCP forwarders with per-forwarder error containment
+        var tcpRemoved = 0
         try {
-            // Clean up inactive TCP forwarders
             val tcpIterator = tcpForwarders.entries.iterator()
-            var tcpRemoved = 0
 
             while (tcpIterator.hasNext()) {
-                val entry = tcpIterator.next()
-                val forwarder = entry.value
+                try {
+                    val entry = tcpIterator.next()
+                    val forwarder = entry.value
 
-                if (!forwarder.isActive()) {
-                    forwarder.close()
-                    tcpIterator.remove()
-                    tcpRemoved++
-                    totalTcpForwardersClosed++
+                    if (!forwarder.isActive()) {
+                        forwarder.close()
+                        tcpIterator.remove()
+                        tcpRemoved++
+                        totalTcpForwardersClosed++
+                    }
+                } catch (e: Exception) {
+                    // Phase 10: Defensive - continue cleanup even if one fails
+                    Log.w(TAG, "Error cleaning up individual TCP forwarder: ${e.message}")
                 }
             }
 
             if (tcpRemoved > 0) {
                 Log.d(TAG, "Cleaned up $tcpRemoved inactive TCP forwarders (total: ${tcpForwarders.size})")
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during TCP forwarder cleanup", e)
+        }
 
-            // Phase 9: Clean up idle UDP forwarders
+        // Phase 10: Cleanup UDP forwarders with per-forwarder error containment
+        var udpRemoved = 0
+        try {
             val udpIterator = udpForwarders.entries.iterator()
-            var udpRemoved = 0
 
             while (udpIterator.hasNext()) {
-                val entry = udpIterator.next()
-                val forwarder = entry.value
+                try {
+                    val entry = udpIterator.next()
+                    val forwarder = entry.value
 
-                if (!forwarder.isActive() || forwarder.isIdle(UDP_IDLE_TIMEOUT_MS)) {
-                    forwarder.close()
-                    udpIterator.remove()
-                    udpRemoved++
-                    totalUdpForwardersClosed++
+                    if (!forwarder.isActive() || forwarder.isIdle(UDP_IDLE_TIMEOUT_MS)) {
+                        forwarder.close()
+                        udpIterator.remove()
+                        udpRemoved++
+                        totalUdpForwardersClosed++
+                    }
+                } catch (e: Exception) {
+                    // Phase 10: Defensive - continue cleanup even if one fails
+                    Log.w(TAG, "Error cleaning up individual UDP forwarder: ${e.message}")
                 }
             }
 
             if (udpRemoved > 0) {
                 Log.d(TAG, "Cleaned up $udpRemoved idle UDP forwarders (total: ${udpForwarders.size})")
             }
-
         } catch (e: Exception) {
-            Log.e(TAG, "Error during forwarder cleanup", e)
+            Log.e(TAG, "Error during UDP forwarder cleanup", e)
         }
     }
 
@@ -270,26 +300,53 @@ class ForwarderRegistry(
      * Close all forwarders.
      * Called on VPN stop.
      * Phase 9: Closes both TCP and UDP forwarders.
+     * Phase 10: Defensive per-forwarder error handling.
      */
     fun closeAll() {
-        try {
-            val tcpCount = tcpForwarders.size
-            val udpCount = udpForwarders.size
+        val tcpCount = tcpForwarders.size
+        val udpCount = udpForwarders.size
 
-            // Close all TCP forwarders
-            tcpForwarders.values.forEach { it.close() }
+        // Phase 10: Close TCP forwarders with per-forwarder error containment
+        try {
+            tcpForwarders.values.forEach { forwarder ->
+                try {
+                    forwarder.close()
+                } catch (e: Exception) {
+                    // Defensive: continue closing others
+                }
+            }
             tcpForwarders.clear()
             totalTcpForwardersClosed += tcpCount
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing TCP forwarders", e)
+            // Defensive: try to clear anyway
+            try {
+                tcpForwarders.clear()
+            } catch (ignored: Exception) {
+            }
+        }
 
-            // Phase 9: Close all UDP forwarders
-            udpForwarders.values.forEach { it.close() }
+        // Phase 10: Close UDP forwarders with per-forwarder error containment
+        try {
+            udpForwarders.values.forEach { forwarder ->
+                try {
+                    forwarder.close()
+                } catch (e: Exception) {
+                    // Defensive: continue closing others
+                }
+            }
             udpForwarders.clear()
             totalUdpForwardersClosed += udpCount
-
-            Log.d(TAG, "All forwarders closed (TCP: $tcpCount, UDP: $udpCount)")
         } catch (e: Exception) {
-            Log.e(TAG, "Error closing all forwarders", e)
+            Log.e(TAG, "Error closing UDP forwarders", e)
+            // Defensive: try to clear anyway
+            try {
+                udpForwarders.clear()
+            } catch (ignored: Exception) {
+            }
         }
+
+        Log.d(TAG, "All forwarders closed (TCP: $tcpCount, UDP: $udpCount)")
     }
 
     /**

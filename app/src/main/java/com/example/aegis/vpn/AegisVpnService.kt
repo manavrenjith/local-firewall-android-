@@ -79,10 +79,21 @@ class AegisVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        // Phase 10: Handle null intent from system restart
+        if (intent == null) {
+            Log.w(TAG, "Received null intent, stopping service")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        when (intent.action) {
             VpnConstants.ACTION_START -> handleStart()
             VpnConstants.ACTION_STOP -> handleStop()
-            else -> Log.w(TAG, "Unknown action: ${intent?.action}")
+            else -> {
+                Log.w(TAG, "Unknown action: ${intent.action}")
+                // Phase 10: Unknown action, stop service to avoid undefined state
+                stopSelf()
+            }
         }
 
         // If system kills the service, do not auto-restart with null intent
@@ -92,6 +103,7 @@ class AegisVpnService : VpnService() {
     /**
      * Handles VPN start request.
      * Idempotent - multiple calls are safe.
+     * Phase 10: Defensive state management.
      */
     private fun handleStart() {
         if (isRunning) {
@@ -101,8 +113,18 @@ class AegisVpnService : VpnService() {
 
         Log.i(TAG, "Starting VPN service")
 
+        // Phase 10: Set instance reference before any operations
+        instance = this
+
         // Start as foreground service with notification
-        startForeground(VpnConstants.NOTIFICATION_ID, createNotification())
+        try {
+            startForeground(VpnConstants.NOTIFICATION_ID, createNotification())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground service", e)
+            instance = null
+            stopSelf()
+            return
+        }
 
         // Establish VPN
         val success = establishVpn()
@@ -113,6 +135,7 @@ class AegisVpnService : VpnService() {
             Log.i(TAG, "VPN started successfully")
         } else {
             Log.e(TAG, "Failed to establish VPN")
+            instance = null
             stopSelf()
         }
     }
@@ -120,19 +143,43 @@ class AegisVpnService : VpnService() {
     /**
      * Handles VPN stop request.
      * Idempotent - multiple calls are safe.
+     * Phase 10: Ensure cleanup even on error.
      */
     private fun handleStop() {
         if (!isRunning) {
             Log.d(TAG, "VPN not running, ignoring stop request")
+            // Phase 10: Clear instance even if not running
+            instance = null
             stopSelf()
             return
         }
 
         Log.i(TAG, "Stopping VPN service")
-        stopTunReader()
-        teardownVpn()
+
+        // Phase 10: Clear instance first
+        instance = null
+
+        // Phase 10: Defensive cleanup - continue even if steps fail
+        try {
+            stopTunReader()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping TunReader", e)
+        }
+
+        try {
+            teardownVpn()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error tearing down VPN", e)
+        }
+
         isRunning = false
-        stopForeground(STOP_FOREGROUND_REMOVE)
+
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping foreground", e)
+        }
+
         stopSelf()
     }
 
@@ -251,37 +298,42 @@ class AegisVpnService : VpnService() {
      * Phase 7: Also nullifies enforcement controller.
      * Phase 8: Also closes all forwarders.
      * Phase 8.3: Also nullifies snapshot provider.
+     * Phase 10: Per-component error containment.
      */
     private fun stopTunReader() {
+        // Phase 10: Stop TunReader with error containment
         try {
             tunReader?.stop()
-            tunReader = null
-
-            // Phase 8: Close all forwarders
-            forwarderRegistry?.closeAll()
-            forwarderRegistry = null
-
-            // Phase 8.3: Clear snapshot provider
-            snapshotProvider = null
-
-            // Phase 4: Clear flow table
-            flowTable?.clear()
-            flowTable = null
-
-            // Phase 5: Clear UID resolver
-            uidResolver = null
-
-            // Phase 6: Clear decision evaluator
-            decisionEvaluator = null
-
-            // Phase 7: Clear enforcement controller
-            enforcementController = null
-
-            Log.d(TAG, "TunReader stopped, forwarders closed, snapshot provider released, " +
-                    "flow table cleared, components released")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping TunReader", e)
         }
+        tunReader = null
+
+        // Phase 10: Close forwarders with error containment
+        try {
+            forwarderRegistry?.closeAll()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing forwarders", e)
+        }
+        forwarderRegistry = null
+
+        // Phase 10: Clear snapshot provider with error containment
+        snapshotProvider = null
+
+        // Phase 10: Clear flow table with error containment
+        try {
+            flowTable?.clear()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing flow table", e)
+        }
+        flowTable = null
+
+        // Phase 10: Clear other components (no cleanup needed, just null)
+        uidResolver = null
+        decisionEvaluator = null
+        enforcementController = null
+
+        Log.d(TAG, "TunReader stopped, all components released")
     }
 
     /**
@@ -321,11 +373,22 @@ class AegisVpnService : VpnService() {
     override fun onDestroy() {
         Log.i(TAG, "Service destroyed")
 
-        // Phase 8.3: Clear instance reference
+        // Phase 10: Defensive cleanup - clear instance first
         instance = null
 
-        stopTunReader()
-        teardownVpn()
+        // Phase 10: Ensure cleanup even if already stopped
+        try {
+            stopTunReader()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onDestroy stopTunReader", e)
+        }
+
+        try {
+            teardownVpn()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onDestroy teardownVpn", e)
+        }
+
         isRunning = false
         super.onDestroy()
     }

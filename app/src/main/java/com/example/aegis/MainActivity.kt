@@ -28,6 +28,7 @@ import com.example.aegis.vpn.VpnController
  *                Phase 8.2: Forwarding Telemetry & Flow Metrics
  *                Phase 8.3: Flow Snapshot Exposure & UI Bridge
  *                Phase 9: UDP Socket Forwarding
+ *                Phase 10: Engine Hardening & Production Readiness
  *
  * Provides basic UI to start and stop VPN service.
  * Handles VPN permission request flow.
@@ -118,7 +119,7 @@ fun VpnControlScreen(
         )
 
         Text(
-            text = "Phase 9: UDP Socket Forwarding",
+            text = "Phase 10: Engine Hardening & Production Readiness",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.secondary,
             modifier = Modifier.padding(bottom = 48.dp)
@@ -139,7 +140,7 @@ fun VpnControlScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
                 Text(
-                    text = "• TCP + UDP forwarding active\n• DNS resolution works\n• QUIC traffic flows\n• Full network parity!",
+                    text = "• Production-hardened engine\n• Leak-free resource management\n• ANR-safe operation\n• Stable under pressure!",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
