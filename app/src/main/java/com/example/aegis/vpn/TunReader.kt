@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLong
  *             Phase 7: Enforcement Controller (Gatekeeper, No Forwarding)
  *             Phase 8: TCP Socket Forwarding (Connectivity Restore)
  *             Phase 8.2: Forwarding Telemetry & Flow Metrics
+ *             Phase 9: UDP Socket Forwarding
  *
  * Responsibilities:
  * - Read raw IP packets from VPN TUN interface
@@ -34,12 +35,12 @@ import java.util.concurrent.atomic.AtomicLong
  * - Evaluate flow decisions (Phase 6)
  * - Evaluate enforcement readiness (Phase 7)
  * - Forward TCP traffic for ALLOW_READY flows (Phase 8)
+ * - Forward UDP traffic for ALLOW_READY flows (Phase 9)
  * - Optional telemetry logging (Phase 8.2, debug only)
  * - Thread lifecycle management
  * - Graceful error handling
  *
- * Non-responsibilities (Phase 8.2):
- * - UDP forwarding (Phase 9)
+ * Non-responsibilities (Phase 9):
  * - Packet blocking
  * - UI control
  * - Telemetry enforcement
@@ -75,6 +76,7 @@ class TunReader(
 
         // Protocol numbers
         private const val PROTO_TCP = 6
+        private const val PROTO_UDP = 17  // Phase 9: UDP forwarding
     }
 
     private var readThread: Thread? = null
@@ -307,29 +309,65 @@ class TunReader(
      * @param length Packet length
      * @return true if forwarded, false if dropped
      */
+    /**
+     * Attempt to forward a packet via forwarder.
+     * Phase 8: TCP forwarding for ALLOW_READY flows.
+     * Phase 9: UDP forwarding for ALLOW_READY flows.
+     *
+     * @param parsedPacket Parsed packet metadata
+     * @param buffer Raw packet buffer
+     * @param length Packet length
+     * @return true if forwarded, false if dropped
+     */
     private fun attemptForwarding(
         parsedPacket: com.example.aegis.vpn.packet.ParsedPacket,
         buffer: ByteArray,
         length: Int
     ): Boolean {
         try {
-            // Phase 8: Only forward TCP
-            if (parsedPacket.ipHeader.protocol != PROTO_TCP) {
-                return false
+            val protocol = parsedPacket.ipHeader.protocol
+
+            // Phase 8: TCP forwarding
+            if (protocol == PROTO_TCP) {
+                return attemptTcpForwarding(parsedPacket, buffer, length)
             }
 
+            // Phase 9: UDP forwarding
+            if (protocol == PROTO_UDP) {
+                return attemptUdpForwarding(parsedPacket, buffer, length)
+            }
+
+            // Other protocols not forwarded
+            return false
+
+        } catch (e: Exception) {
+            Log.w(TAG, "Error attempting forwarding: ${e.message}")
+            return false
+        }
+    }
+
+    /**
+     * Attempt TCP forwarding.
+     * Phase 8: TCP socket forwarding.
+     */
+    private fun attemptTcpForwarding(
+        parsedPacket: com.example.aegis.vpn.packet.ParsedPacket,
+        buffer: ByteArray,
+        length: Int
+    ): Boolean {
+        try {
             // Get flow entry
             val flowEntry = flowTable.getFlow(parsedPacket.flowKey) ?: return false
 
-            // Phase 8: Only forward ALLOW_READY flows
+            // Only forward ALLOW_READY flows
             synchronized(flowEntry) {
                 if (flowEntry.enforcementState != EnforcementState.ALLOW_READY) {
                     return false
                 }
             }
 
-            // Get or create forwarder
-            val forwarder = forwarderRegistry.getOrCreateForwarder(flowEntry) ?: return false
+            // Get or create TCP forwarder
+            val forwarder = forwarderRegistry.getOrCreateTcpForwarder(flowEntry) ?: return false
 
             // Extract TCP payload and sequence number
             val tcpHeader = parsedPacket.transportHeader as? TransportHeader.Tcp ?: return false
@@ -347,7 +385,48 @@ class TunReader(
             return forwarder.forwardUplink(payload, tcpHeader.sequenceNumber)
 
         } catch (e: Exception) {
-            Log.w(TAG, "Error attempting forwarding: ${e.message}")
+            Log.w(TAG, "Error attempting TCP forwarding: ${e.message}")
+            return false
+        }
+    }
+
+    /**
+     * Attempt UDP forwarding.
+     * Phase 9: UDP socket forwarding.
+     */
+    private fun attemptUdpForwarding(
+        parsedPacket: com.example.aegis.vpn.packet.ParsedPacket,
+        buffer: ByteArray,
+        length: Int
+    ): Boolean {
+        try {
+            // Get flow entry
+            val flowEntry = flowTable.getFlow(parsedPacket.flowKey) ?: return false
+
+            // Only forward ALLOW_READY flows
+            synchronized(flowEntry) {
+                if (flowEntry.enforcementState != EnforcementState.ALLOW_READY) {
+                    return false
+                }
+            }
+
+            // Get or create UDP forwarder
+            val forwarder = forwarderRegistry.getOrCreateUdpForwarder(flowEntry) ?: return false
+
+            // Extract UDP payload
+            val udpHeader = parsedPacket.transportHeader as? TransportHeader.Udp ?: return false
+            val payload = extractUdpPayload(buffer, length, parsedPacket.ipHeader.headerLength)
+
+            if (payload.isEmpty()) {
+                // Empty UDP packet, skip
+                return true
+            }
+
+            // Phase 9: Send uplink UDP packet
+            return forwarder.sendUplink(payload)
+
+        } catch (e: Exception) {
+            Log.w(TAG, "Error attempting UDP forwarding: ${e.message}")
             return false
         }
     }
@@ -378,6 +457,37 @@ class TunReader(
 
         } catch (e: Exception) {
             Log.w(TAG, "Error extracting TCP payload: ${e.message}")
+            return ByteArray(0)
+        }
+    }
+
+    /**
+     * Extract UDP payload from raw packet.
+     * Phase 9: UDP payload extraction.
+     *
+     * @param buffer Raw packet buffer
+     * @param length Total packet length
+     * @param ipHeaderLength IP header length in bytes
+     * @return UDP payload bytes
+     */
+    private fun extractUdpPayload(
+        buffer: ByteArray,
+        length: Int,
+        ipHeaderLength: Int
+    ): ByteArray {
+        try {
+            val udpHeaderSize = 8  // UDP header is always 8 bytes
+            val headerSize = ipHeaderLength + udpHeaderSize
+
+            if (headerSize >= length) {
+                return ByteArray(0)
+            }
+
+            val payloadSize = length - headerSize
+            return buffer.copyOfRange(headerSize, headerSize + payloadSize)
+
+        } catch (e: Exception) {
+            Log.w(TAG, "Error extracting UDP payload: ${e.message}")
             return ByteArray(0)
         }
     }

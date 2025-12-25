@@ -89,14 +89,15 @@ object TelemetryLogger {
             // Log aggregate data
             Log.d(TAG, "=== Telemetry Snapshot ===")
             Log.d(TAG, "Flows: ${flowStats.totalFlows} (TCP: ${flowStats.tcpFlows})")
-            Log.d(TAG, "Forwarders: ${forwarderStats.activeForwarders} active, " +
-                    "${forwarderStats.totalForwardersCreated} created, " +
-                    "${forwarderStats.totalForwardersClosed} closed")
+            Log.d(TAG, "Forwarders: TCP ${forwarderStats.activeTcpForwarders}, UDP ${forwarderStats.activeUdpForwarders}")
+            Log.d(TAG, "Created: TCP ${forwarderStats.totalTcpForwardersCreated}, UDP ${forwarderStats.totalUdpForwardersCreated}")
+            Log.d(TAG, "Closed: TCP ${forwarderStats.totalTcpForwardersClosed}, UDP ${forwarderStats.totalUdpForwardersClosed}")
             Log.d(TAG, "Forwarding: $activeForwarding active flows")
             Log.d(TAG, "Traffic: ${formatBytes(totalUplinkBytes)} ↑ / ${formatBytes(totalDownlinkBytes)} ↓")
             Log.d(TAG, "Packets: $totalForwardedPackets forwarded")
             Log.d(TAG, "Errors: $totalErrors")
             Log.d(TAG, "=========================")
+
 
         } catch (e: Exception) {
             // Silently ignore telemetry logging errors

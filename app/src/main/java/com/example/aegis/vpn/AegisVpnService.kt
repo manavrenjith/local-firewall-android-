@@ -15,6 +15,7 @@ import com.example.aegis.vpn.flow.FlowTable
 import com.example.aegis.vpn.forwarding.ForwarderRegistry
 import com.example.aegis.vpn.telemetry.FlowSnapshotProvider
 import com.example.aegis.vpn.uid.UidResolver
+import java.net.DatagramSocket
 
 /**
  * Aegis VPN Service - Phase 2: TUN Interface & Routing
@@ -25,6 +26,8 @@ import com.example.aegis.vpn.uid.UidResolver
  *                      Phase 7: Enforcement Controller (Gatekeeper, No Forwarding)
  *                      Phase 8: TCP Socket Forwarding (Connectivity Restore)
  *                      Phase 8.2: Forwarding Telemetry & Flow Metrics
+ *                      Phase 8.3: Flow Snapshot Exposure & UI Bridge
+ *                      Phase 9: UDP Socket Forwarding
  *
  * Responsibilities:
  * - VPN lifecycle management (start/stop)
@@ -38,13 +41,14 @@ import com.example.aegis.vpn.uid.UidResolver
  * - Decision evaluation (Phase 6)
  * - Enforcement readiness evaluation (Phase 7)
  * - TCP forwarding for ALLOW_READY flows (Phase 8)
+ * - UDP forwarding for ALLOW_READY flows (Phase 9)
  * - Telemetry tracking (Phase 8.2, observation only)
+ * - Snapshot provider for UI bridge (Phase 8.3, read-only)
  *
- * Non-responsibilities (Phase 8.2):
- * - UDP forwarding (Phase 9)
+ * Non-responsibilities (Phase 9):
  * - Packet blocking
- * - UI control
- * - Telemetry enforcement
+ * - UI rendering
+ * - Observers/listeners
  */
 class AegisVpnService : VpnService() {
 
@@ -209,11 +213,18 @@ class AegisVpnService : VpnService() {
             // Phase 7: Create enforcement controller
             enforcementController = EnforcementController(flowTable!!)
 
-            // Phase 8/8.1: Create forwarder registry with TUN interface and socket protection
-            forwarderRegistry = ForwarderRegistry(iface) { socket ->
-                // Protect socket to prevent routing loop
-                protect(socket)
-            }
+            // Phase 8/8.1/9: Create forwarder registry with TUN interface and socket protection
+            forwarderRegistry = ForwarderRegistry(
+                tunInterface = iface,
+                protectSocket = { socket ->
+                    // Protect TCP socket to prevent routing loop
+                    protect(socket)
+                },
+                protectDatagramSocket = { datagramSocket ->
+                    // Phase 9: Protect UDP socket to prevent routing loop
+                    protect(datagramSocket)
+                }
+            )
 
             tunReader = TunReader(iface, flowTable!!, uidResolver!!, decisionEvaluator!!,
                                   enforcementController!!, forwarderRegistry!!) {
