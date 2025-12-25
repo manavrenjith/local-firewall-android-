@@ -4,12 +4,14 @@ import android.util.Log
 import com.example.aegis.vpn.packet.FlowKey
 import com.example.aegis.vpn.packet.ParsedPacket
 import com.example.aegis.vpn.packet.TransportHeader
+import com.example.aegis.vpn.telemetry.FlowSnapshot
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * FlowTable - Phase 4: Flow Table & Metadata
  *             Phase 5: UID Attribution
  *             Phase 6: Decision Engine (Decision-Only, No Enforcement)
+ *             Phase 8.2: Forwarding Telemetry & Flow Metrics
  *
  * Thread-safe in-memory flow tracking table.
  * Maps FlowKey to FlowEntry for active connections.
@@ -21,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - Extract transport metadata
  * - Support UID attribution (Phase 5)
  * - Support decision evaluation (Phase 6)
+ * - Provide flow snapshots (Phase 8.2)
  *
  * Non-responsibilities (Phase 6):
  * - No rule enforcement
@@ -84,6 +87,17 @@ class FlowTable {
             // Never crash VPN on flow table errors
             Log.e(TAG, "Error processing packet in flow table", e)
         }
+    }
+
+    /**
+     * Get existing flow by FlowKey.
+     * Phase 8: Used for forwarding lookup.
+     *
+     * @param flowKey FlowKey to lookup
+     * @return FlowEntry if exists, null otherwise
+     */
+    fun getFlow(flowKey: FlowKey): FlowEntry? {
+        return flows[flowKey]
     }
 
     /**
@@ -317,6 +331,56 @@ class FlowTable {
         } catch (e: Exception) {
             // Swallow errors - never break flow table
             Log.e(TAG, "Error during enforcement evaluation iteration", e)
+        }
+    }
+
+    /**
+     * Create snapshot of all flows.
+     * Phase 8.2: Returns immutable snapshots for observation/debugging.
+     *
+     * @return List of immutable FlowSnapshot objects
+     */
+    fun snapshotFlows(): List<FlowSnapshot> {
+        return try {
+            flows.values.mapNotNull { flow ->
+                try {
+                    synchronized(flow) {
+                        val now = System.currentTimeMillis()
+                        FlowSnapshot(
+                            flowKey = flow.flowKey,
+                            protocol = flow.protocol,
+                            uid = flow.uid,
+                            decision = flow.decision,
+                            enforcementState = flow.enforcementState,
+                            firstSeenTimestamp = flow.firstSeenTimestamp,
+                            lastSeenTimestamp = flow.lastSeenTimestamp,
+                            flowAge = flow.getAge(),
+                            lastActivityTime = now - flow.lastSeenTimestamp,
+                            totalPacketCount = flow.packetCount,
+                            totalByteCount = flow.byteCount,
+                            uplinkPackets = flow.telemetry.uplinkPackets,
+                            uplinkBytes = flow.telemetry.uplinkBytes,
+                            downlinkPackets = flow.telemetry.downlinkPackets,
+                            downlinkBytes = flow.telemetry.downlinkBytes,
+                            firstForwardedAt = flow.telemetry.firstForwardedAt,
+                            lastForwardedAt = flow.telemetry.lastForwardedAt,
+                            forwardingErrors = flow.telemetry.forwardingErrors,
+                            tcpResetsSent = flow.telemetry.tcpResetsSent,
+                            tcpFinsSent = flow.telemetry.tcpFinsSent,
+                            lastActivityDirection = flow.telemetry.lastActivityDirection,
+                            forwardingAge = flow.telemetry.getForwardingAge(),
+                            forwardingIdleTime = flow.telemetry.getIdleTime()
+                        )
+                    }
+                } catch (e: Exception) {
+                    // Skip this flow on snapshot error
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            // Return empty list on error
+            Log.e(TAG, "Error creating flow snapshots", e)
+            emptyList()
         }
     }
 }

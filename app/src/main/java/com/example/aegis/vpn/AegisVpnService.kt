@@ -12,6 +12,7 @@ import com.example.aegis.MainActivity
 import com.example.aegis.vpn.decision.DecisionEvaluator
 import com.example.aegis.vpn.enforcement.EnforcementController
 import com.example.aegis.vpn.flow.FlowTable
+import com.example.aegis.vpn.forwarding.ForwarderRegistry
 import com.example.aegis.vpn.uid.UidResolver
 
 /**
@@ -21,24 +22,28 @@ import com.example.aegis.vpn.uid.UidResolver
  *                      Phase 5: UID Attribution (Best-Effort, Metadata Only)
  *                      Phase 6: Decision Engine (Decision-Only, No Enforcement)
  *                      Phase 7: Enforcement Controller (Gatekeeper, No Forwarding)
+ *                      Phase 8: TCP Socket Forwarding (Connectivity Restore)
+ *                      Phase 8.2: Forwarding Telemetry & Flow Metrics
  *
  * Responsibilities:
  * - VPN lifecycle management (start/stop)
  * - Foreground service with persistent notification
  * - VPN establishment and teardown
  * - Idempotent operation handling
- * - TUN packet reading (observation only)
+ * - TUN packet reading (Phase 2+)
  * - Read thread lifecycle management
  * - Flow table management (Phase 4)
  * - UID resolution (Phase 5)
  * - Decision evaluation (Phase 6)
  * - Enforcement readiness evaluation (Phase 7)
+ * - TCP forwarding for ALLOW_READY flows (Phase 8)
+ * - Telemetry tracking (Phase 8.2, observation only)
  *
- * Non-responsibilities (Phase 7):
- * - No packet modification
- * - No packet forwarding
- * - No socket operations
- * - No actual enforcement (Phase 8+)
+ * Non-responsibilities (Phase 8.2):
+ * - UDP forwarding (Phase 9)
+ * - Packet blocking
+ * - UI control
+ * - Telemetry enforcement
  */
 class AegisVpnService : VpnService() {
 
@@ -48,6 +53,7 @@ class AegisVpnService : VpnService() {
     private var uidResolver: UidResolver? = null
     private var decisionEvaluator: DecisionEvaluator? = null
     private var enforcementController: EnforcementController? = null
+    private var forwarderRegistry: ForwarderRegistry? = null
     private var isRunning = false
 
     companion object {
@@ -164,6 +170,7 @@ class AegisVpnService : VpnService() {
      * Phase 5: Creates UID resolver for attribution.
      * Phase 6: Creates decision evaluator.
      * Phase 7: Creates enforcement controller.
+     * Phase 8: Creates forwarder registry.
      */
     private fun startTunReader() {
         val iface = vpnInterface
@@ -185,15 +192,21 @@ class AegisVpnService : VpnService() {
             // Phase 7: Create enforcement controller
             enforcementController = EnforcementController(flowTable!!)
 
+            // Phase 8/8.1: Create forwarder registry with TUN interface and socket protection
+            forwarderRegistry = ForwarderRegistry(iface) { socket ->
+                // Protect socket to prevent routing loop
+                protect(socket)
+            }
+
             tunReader = TunReader(iface, flowTable!!, uidResolver!!, decisionEvaluator!!,
-                                  enforcementController!!) {
+                                  enforcementController!!, forwarderRegistry!!) {
                 // Error callback - triggered on unrecoverable read errors
                 Log.e(TAG, "TunReader reported error, initiating VPN teardown")
                 handleStop()
             }
             tunReader?.start()
             Log.d(TAG, "TunReader started with flow tracking, UID resolution, decision evaluation, " +
-                    "and enforcement control")
+                    "enforcement control, and bidirectional TCP forwarding")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start TunReader", e)
             handleStop()
@@ -208,11 +221,16 @@ class AegisVpnService : VpnService() {
      * Phase 5: Also nullifies UID resolver.
      * Phase 6: Also nullifies decision evaluator.
      * Phase 7: Also nullifies enforcement controller.
+     * Phase 8: Also closes all forwarders.
      */
     private fun stopTunReader() {
         try {
             tunReader?.stop()
             tunReader = null
+
+            // Phase 8: Close all forwarders
+            forwarderRegistry?.closeAll()
+            forwarderRegistry = null
 
             // Phase 4: Clear flow table
             flowTable?.clear()
@@ -227,7 +245,7 @@ class AegisVpnService : VpnService() {
             // Phase 7: Clear enforcement controller
             enforcementController = null
 
-            Log.d(TAG, "TunReader stopped, flow table cleared, components released")
+            Log.d(TAG, "TunReader stopped, forwarders closed, flow table cleared, components released")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping TunReader", e)
         }

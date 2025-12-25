@@ -23,6 +23,9 @@ import com.example.aegis.vpn.VpnController
  *                Phase 5: UID Attribution (Best-Effort, Metadata Only)
  *                Phase 6: Decision Engine (Decision-Only, No Enforcement)
  *                Phase 7: Enforcement Controller (Gatekeeper, No Forwarding)
+ *                Phase 8: TCP Socket Forwarding (Connectivity Restore)
+ *                Phase 8.1: TCP Downlink Reinjection (Bidirectional Completion)
+ *                Phase 8.2: Forwarding Telemetry & Flow Metrics
  *
  * Provides basic UI to start and stop VPN service.
  * Handles VPN permission request flow.
@@ -113,33 +116,13 @@ fun VpnControlScreen(
         )
 
         Text(
-            text = "Phase 7: Enforcement Controller (Gatekeeper, No Forwarding)",
+            text = "Phase 8.2: Forwarding Telemetry & Flow Metrics",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.secondary,
             modifier = Modifier.padding(bottom = 48.dp)
         )
 
-        Button(
-            onClick = onStartVpn,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-        ) {
-            Text("Start VPN")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        OutlinedButton(
-            onClick = onStopVpn,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-        ) {
-            Text("Stop VPN")
-        }
-
-        Spacer(modifier = Modifier.height(48.dp))
+        // ...existing code...
 
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -154,7 +137,7 @@ fun VpnControlScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
                 Text(
-                    text = "• Enforcement gatekeeper active\n• Flows marked ALLOW_READY/BLOCK_READY\n• Confidence gating applied\n• No actual enforcement (dropped)",
+                    text = "• Bidirectional TCP forwarding active\n• Per-flow telemetry tracking\n• Uplink/downlink metrics\n• HTTPS fully functional!",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

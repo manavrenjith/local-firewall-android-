@@ -4,8 +4,12 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.example.aegis.vpn.decision.DecisionEvaluator
 import com.example.aegis.vpn.enforcement.EnforcementController
+import com.example.aegis.vpn.enforcement.EnforcementState
 import com.example.aegis.vpn.flow.FlowTable
+import com.example.aegis.vpn.forwarding.ForwarderRegistry
 import com.example.aegis.vpn.packet.PacketParser
+import com.example.aegis.vpn.packet.TransportHeader
+import com.example.aegis.vpn.telemetry.TelemetryLogger
 import com.example.aegis.vpn.uid.UidResolver
 import java.io.FileInputStream
 import java.io.IOException
@@ -19,6 +23,8 @@ import java.util.concurrent.atomic.AtomicLong
  *             Phase 5: UID Attribution (Best-Effort, Metadata Only)
  *             Phase 6: Decision Engine (Decision-Only, No Enforcement)
  *             Phase 7: Enforcement Controller (Gatekeeper, No Forwarding)
+ *             Phase 8: TCP Socket Forwarding (Connectivity Restore)
+ *             Phase 8.2: Forwarding Telemetry & Flow Metrics
  *
  * Responsibilities:
  * - Read raw IP packets from VPN TUN interface
@@ -27,15 +33,16 @@ import java.util.concurrent.atomic.AtomicLong
  * - Attribute UIDs to flows (Phase 5)
  * - Evaluate flow decisions (Phase 6)
  * - Evaluate enforcement readiness (Phase 7)
- * - Observation-only (no forwarding, no modification)
+ * - Forward TCP traffic for ALLOW_READY flows (Phase 8)
+ * - Optional telemetry logging (Phase 8.2, debug only)
  * - Thread lifecycle management
  * - Graceful error handling
  *
- * Non-responsibilities (Phase 7):
- * - No packet modification
- * - No packet forwarding
- * - No socket operations
- * - No actual enforcement (Phase 8+)
+ * Non-responsibilities (Phase 8.2):
+ * - UDP forwarding (Phase 9)
+ * - Packet blocking
+ * - UI control
+ * - Telemetry enforcement
  */
 class TunReader(
     private val vpnInterface: ParcelFileDescriptor,
@@ -43,6 +50,7 @@ class TunReader(
     private val uidResolver: UidResolver,
     private val decisionEvaluator: DecisionEvaluator,
     private val enforcementController: EnforcementController,
+    private val forwarderRegistry: ForwarderRegistry,
     private val onError: () -> Unit
 ) {
 
@@ -58,6 +66,15 @@ class TunReader(
 
         // Enforcement evaluation interval
         private const val ENFORCEMENT_EVALUATION_INTERVAL_MS = 20000L  // 20 seconds
+
+        // Forwarder cleanup interval
+        private const val FORWARDER_CLEANUP_INTERVAL_MS = 30000L  // 30 seconds
+
+        // Phase 8.2: Telemetry logging interval (debug only)
+        private const val TELEMETRY_LOGGING_INTERVAL_MS = 30000L  // 30 seconds
+
+        // Protocol numbers
+        private const val PROTO_TCP = 6
     }
 
     private var readThread: Thread? = null
@@ -79,6 +96,16 @@ class TunReader(
 
     // Phase 7: Enforcement evaluation timing
     private var lastEnforcementEvaluationTime = 0L
+
+    // Phase 8: Forwarder cleanup timing
+    private var lastForwarderCleanupTime = 0L
+
+    // Phase 8.2: Telemetry logging timing (debug only)
+    private var lastTelemetryLoggingTime = 0L
+
+    // Phase 8: Forwarding statistics
+    private val totalPacketsForwarded = AtomicLong(0)
+    private val totalPacketsDropped = AtomicLong(0)
 
     /**
      * Starts the packet read loop.
@@ -184,6 +211,8 @@ class TunReader(
      * Phase 4: Track flow in flow table.
      * Phase 5: Periodically resolve UIDs.
      * Phase 6: Periodically evaluate decisions.
+     * Phase 7: Periodically evaluate enforcement.
+     * Phase 8: Forward TCP packets for ALLOW_READY flows.
      *
      * @param buffer Byte array containing packet data
      * @param length Number of valid bytes in buffer
@@ -223,6 +252,26 @@ class TunReader(
                     enforcementController.evaluateEnforcement()
                 }
 
+                // Phase 8: Periodically cleanup forwarders (time-based, not per-packet)
+                if (now - lastForwarderCleanupTime > FORWARDER_CLEANUP_INTERVAL_MS) {
+                    lastForwarderCleanupTime = now
+                    forwarderRegistry.cleanup()
+                }
+
+                // Phase 8.2: Periodically log telemetry (debug only, time-based)
+                if (now - lastTelemetryLoggingTime > TELEMETRY_LOGGING_INTERVAL_MS) {
+                    lastTelemetryLoggingTime = now
+                    TelemetryLogger.logAggregateTelemetry(flowTable, forwarderRegistry)
+                }
+
+                // Phase 8: Attempt TCP forwarding for eligible flows
+                val forwarded = attemptForwarding(parsedPacket, buffer, length)
+                if (forwarded) {
+                    totalPacketsForwarded.incrementAndGet()
+                } else {
+                    totalPacketsDropped.incrementAndGet()
+                }
+
                 // Log parsed packet info (rate-limited)
                 if (VpnConstants.LOG_PARSED_PACKETS && totalPacketsParsed.get() % 1000 == 1L) {
                     logParsedPacket(parsedPacket)
@@ -243,10 +292,94 @@ class TunReader(
         }
 
         // Future phases will:
-        // - Forward packets via protected sockets (Phase 8+)
-        // - Enforce decisions (Phase 8+)
+        // - UDP forwarding (Phase 9+)
+        // - Production hardening (Phase 10+)
 
-        // Phase 2/3/4/5/6/7: Packet is silently dropped (by design)
+        // Phase 8: TCP forwarding active for ALLOW_READY flows
+    }
+
+    /**
+     * Attempt to forward a packet via TCP forwarder.
+     * Phase 8: Only forwards TCP packets for ALLOW_READY flows.
+     *
+     * @param parsedPacket Parsed packet metadata
+     * @param buffer Raw packet buffer
+     * @param length Packet length
+     * @return true if forwarded, false if dropped
+     */
+    private fun attemptForwarding(
+        parsedPacket: com.example.aegis.vpn.packet.ParsedPacket,
+        buffer: ByteArray,
+        length: Int
+    ): Boolean {
+        try {
+            // Phase 8: Only forward TCP
+            if (parsedPacket.ipHeader.protocol != PROTO_TCP) {
+                return false
+            }
+
+            // Get flow entry
+            val flowEntry = flowTable.getFlow(parsedPacket.flowKey) ?: return false
+
+            // Phase 8: Only forward ALLOW_READY flows
+            synchronized(flowEntry) {
+                if (flowEntry.enforcementState != EnforcementState.ALLOW_READY) {
+                    return false
+                }
+            }
+
+            // Get or create forwarder
+            val forwarder = forwarderRegistry.getOrCreateForwarder(flowEntry) ?: return false
+
+            // Extract TCP payload and sequence number
+            val tcpHeader = parsedPacket.transportHeader as? TransportHeader.Tcp ?: return false
+            val payload = extractTcpPayload(buffer, length, parsedPacket.ipHeader.headerLength,
+                                           tcpHeader.headerLength)
+
+            if (payload.isEmpty()) {
+                // No payload to forward (SYN, ACK, etc.)
+                // Phase 8.1: Still update sequences for ACK generation
+                forwarder.updateSequences(tcpHeader.sequenceNumber, 0)
+                return true
+            }
+
+            // Phase 8.1: Forward uplink data with sequence number
+            return forwarder.forwardUplink(payload, tcpHeader.sequenceNumber)
+
+        } catch (e: Exception) {
+            Log.w(TAG, "Error attempting forwarding: ${e.message}")
+            return false
+        }
+    }
+
+    /**
+     * Extract TCP payload from raw packet.
+     *
+     * @param buffer Raw packet buffer
+     * @param length Total packet length
+     * @param ipHeaderLength IP header length in bytes
+     * @param tcpHeaderLength TCP header length in bytes
+     * @return TCP payload bytes
+     */
+    private fun extractTcpPayload(
+        buffer: ByteArray,
+        length: Int,
+        ipHeaderLength: Int,
+        tcpHeaderLength: Int
+    ): ByteArray {
+        try {
+            val headerSize = ipHeaderLength + tcpHeaderLength
+            if (headerSize >= length) {
+                return ByteArray(0)
+            }
+
+            val payloadSize = length - headerSize
+            return buffer.copyOfRange(headerSize, headerSize + payloadSize)
+
+        } catch (e: Exception) {
+            Log.w(TAG, "Error extracting TCP payload: ${e.message}")
+            return ByteArray(0)
+        }
     }
 
     /**

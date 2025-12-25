@@ -3,10 +3,12 @@ package com.example.aegis.vpn.flow
 import com.example.aegis.vpn.enforcement.EnforcementState
 import com.example.aegis.vpn.packet.FlowKey
 import com.example.aegis.vpn.packet.TransportHeader
+import com.example.aegis.vpn.telemetry.FlowTelemetry
 
 /**
  * FlowEntry - Phase 4: Flow Table & Metadata
  *             Phase 7: Enforcement Controller
+ *             Phase 8.2: Forwarding Telemetry & Flow Metrics
  *
  * Mutable entry representing a network flow.
  * Contains counters, timestamps, metadata, and enforcement state.
@@ -26,7 +28,10 @@ data class FlowEntry(
     var decision: FlowDecision = FlowDecision.UNDECIDED,
 
     // Phase 7: Enforcement state (metadata only)
-    var enforcementState: EnforcementState = EnforcementState.NONE
+    var enforcementState: EnforcementState = EnforcementState.NONE,
+
+    // Phase 8.2: Forwarding telemetry (observation only)
+    var telemetry: FlowTelemetry = FlowTelemetry()
 ) {
     companion object {
         const val UID_UNKNOWN = -1
